@@ -221,7 +221,7 @@ namespace Households
             Console.WriteLine($"\nProcessing {_structuralEventQueue.Count} structural events sequentially...");
             while (_structuralEventQueue.TryDequeue(out PendingEvent ev))
             {
-                // Verify household still exists in the registry (e.g., if multiple events changed it)
+                // Verify household still exists in the registry
                 if (!_registry.TryGetValue(ev.HouseholdId, out var loc)) continue;
 
                 var bucket = _buckets[loc.HouseholdSize];
@@ -254,7 +254,15 @@ namespace Households
                 {
                     int newSize = loc.HouseholdSize - 1;
                     int startIdx = loc.LocalIndex * loc.HouseholdSize;
+
+                    // FIX: Instead of relying on a stale absolute index from before previous mutations,
+                    // calculate the local index relative to the household's CURRENT bucket position.
+                    // If the absolute index is out of bounds for the current household position, safely default to the last person.
                     int targetLocalPersonIdx = ev.TargetPersonAbsIdx - startIdx;
+                    if (targetLocalPersonIdx < 0 || targetLocalPersonIdx >= loc.HouseholdSize)
+                    {
+                        targetLocalPersonIdx = loc.HouseholdSize - 1;
+                    }
 
                     if (newSize == 0)
                     {
