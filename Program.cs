@@ -100,14 +100,14 @@ namespace Households
 
         public int Age
         {
-            get => _storage.AgesSpan[AbsIdx];
-            set => _storage.AgesSpan[AbsIdx] = value;
+            get => _storage.Ages[AbsIdx];
+            set => _storage.Ages[AbsIdx] = value;
         }
 
         public string Hf
         {
-            get => _storage.HfsSpan[AbsIdx];
-            set => _storage.HfsSpan[AbsIdx] = value;
+            get => _storage.Hfs[AbsIdx];
+            set => _storage.Hfs[AbsIdx] = value;
         }
 
         /// <summary>
@@ -150,8 +150,8 @@ namespace Households
             set
             {
                 int absIdx = _localHIdx * _size + index;
-                _bucket.AgesSpan[absIdx] = value.Age;
-                _bucket.HfsSpan[absIdx] = value.Hf;
+                _bucket.Ages[absIdx] = value.Age;
+                _bucket.Hfs[absIdx] = value.Hf;
             }
         }
 
@@ -221,7 +221,6 @@ namespace Households
             Console.WriteLine($"\nProcessing {_structuralEventQueue.Count} structural events sequentially...");
             while (_structuralEventQueue.TryDequeue(out PendingEvent ev))
             {
-                // Verify household still exists in the registry
                 if (!_registry.TryGetValue(ev.HouseholdId, out var loc)) continue;
 
                 var bucket = _buckets[loc.HouseholdSize];
@@ -231,13 +230,12 @@ namespace Households
                     int newSize = loc.HouseholdSize + 1;
                     if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
 
-                    var oldAges = bucket.AgesSpan.Slice(loc.LocalIndex * loc.HouseholdSize, loc.HouseholdSize);
-                    var oldEdus = bucket.HfsSpan.Slice(loc.LocalIndex * loc.HouseholdSize, loc.HouseholdSize);
-
                     int[] newAges = new int[newSize];
                     string[] newEdus = new string[newSize];
-                    oldAges.CopyTo(newAges.AsSpan());
-                    oldEdus.CopyTo(newEdus.AsSpan());
+
+                    int sourceStart = loc.LocalIndex * loc.HouseholdSize;
+                    Array.Copy(bucket.Ages, sourceStart, newAges, 0, loc.HouseholdSize);
+                    Array.Copy(bucket.Hfs, sourceStart, newEdus, 0, loc.HouseholdSize);
 
                     newAges[newSize - 1] = 0;
                     newEdus[newSize - 1] = "None";
@@ -255,9 +253,6 @@ namespace Households
                     int newSize = loc.HouseholdSize - 1;
                     int startIdx = loc.LocalIndex * loc.HouseholdSize;
 
-                    // FIX: Instead of relying on a stale absolute index from before previous mutations,
-                    // calculate the local index relative to the household's CURRENT bucket position.
-                    // If the absolute index is out of bounds for the current household position, safely default to the last person.
                     int targetLocalPersonIdx = ev.TargetPersonAbsIdx - startIdx;
                     if (targetLocalPersonIdx < 0 || targetLocalPersonIdx >= loc.HouseholdSize)
                     {
@@ -266,7 +261,6 @@ namespace Households
 
                     if (newSize == 0)
                     {
-                        // The last member died, entirely dissolve the household
                         bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
                         {
                             _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
@@ -281,12 +275,11 @@ namespace Households
                         string[] newEdus = new string[newSize];
                         int destIdx = 0;
 
-                        // Transfer everyone except the deceased person
                         for (int i = 0; i < loc.HouseholdSize; i++)
                         {
                             if (i == targetLocalPersonIdx) continue;
-                            newAges[destIdx] = bucket.AgesSpan[startIdx + i];
-                            newEdus[destIdx] = bucket.HfsSpan[startIdx + i];
+                            newAges[destIdx] = bucket.Ages[startIdx + i];
+                            newEdus[destIdx] = bucket.Hfs[startIdx + i];
                             destIdx++;
                         }
 
@@ -314,20 +307,18 @@ namespace Households
         public int HouseholdSize { get; }
         public int HouseholdCount { get; private set; }
 
-        private int[] _ages;
-        private string[] _hfs;
+        public int[] Ages { get; }
+        public string[] Hfs { get; }
         private int[] _householdIds;
 
         public HouseholdsOfGivenSize(int householdSize, int initialCapacity)
         {
             HouseholdSize = householdSize;
-            _ages = new int[initialCapacity * householdSize];
-            _hfs = new string[initialCapacity * householdSize];
+            Ages = new int[initialCapacity * householdSize];
+            Hfs = new string[initialCapacity * householdSize];
             _householdIds = new int[initialCapacity];
         }
 
-        public Span<int> AgesSpan => _ages.AsSpan();
-        public Span<string> HfsSpan => _hfs.AsSpan();
         public int GetHouseholdId(int localHIdx) => _householdIds[localHIdx];
 
         public int InsertHousehold(int householdId, int[] ages, string[] educations)
@@ -338,8 +329,8 @@ namespace Households
 
             for (int i = 0; i < HouseholdSize; i++)
             {
-                _ages[startPersonIdx + i] = ages[i];
-                _hfs[startPersonIdx + i] = educations[i];
+                Ages[startPersonIdx + i] = ages[i];
+                Hfs[startPersonIdx + i] = educations[i];
             }
             HouseholdCount++;
             return localHIdx;
@@ -356,8 +347,8 @@ namespace Households
 
                 for (int i = 0; i < HouseholdSize; i++)
                 {
-                    _ages[targetStart + i] = _ages[lastStart + i];
-                    _hfs[targetStart + i] = _hfs[lastStart + i];
+                    Ages[targetStart + i] = Ages[lastStart + i];
+                    Hfs[targetStart + i] = Hfs[lastStart + i];
                 }
                 onLastHouseholdMoved(_householdIds[targetLocalHIdx], targetLocalHIdx);
             }
@@ -411,7 +402,7 @@ namespace Households
                 Console.Write($"  Household ID {_householdIds[h]}: ");
                 int start = h * HouseholdSize;
                 for (int p = 0; p < HouseholdSize; p++)
-                    Console.Write($"[Age: {_ages[start + p]}, Edu: {_hfs[start + p]}] ");
+                    Console.Write($"[Age: {Ages[start + p]}, Edu: {Hfs[start + p]}] ");
                 Console.WriteLine();
             }
         }
