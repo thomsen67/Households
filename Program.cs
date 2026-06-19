@@ -38,7 +38,9 @@ namespace Households
         }
     }
 
-
+    /// <summary>
+    /// Husholdnings-"objekt"
+    /// </summary>
     [DebuggerDisplay("Household ID: {Id}, Size: {Size}")]
     [DebuggerTypeProxy(typeof(HouseholdDebugView))]
     public readonly struct Household
@@ -87,6 +89,9 @@ namespace Households
         }
     }
 
+    /// <summary>
+    /// Person-"objekt"
+    /// </summary>
     [DebuggerDisplay("Age = {Age}, Hf = {Hf}")]
     public readonly struct Person
     {
@@ -430,9 +435,9 @@ namespace Households
                 Household household = new Household(this, h, id);
 
                 // Personer bliver ældre
-                for (int p = 0; p < household.Members.Count; p++)
+                for (int i = 0; i < household.Members.Count; i++)
                 {
-                    Person person = household.Members[p];
+                    Person person = household.Members[i];
                     person.Age += 1;
                 }
 
@@ -445,7 +450,6 @@ namespace Households
                     int deadAbsIdx = -1;
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 65) deadAbsIdx = household.Members[p].AbsIdx;
-
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, HouseholdSize, h, deadAbsIdx));
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth, HouseholdSize, h));
                 }
@@ -454,7 +458,6 @@ namespace Households
                     int deadAbsIdx = -1;
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 33) deadAbsIdx = household.Members[p].AbsIdx;
-
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, HouseholdSize, h, deadAbsIdx));
                 }
             });
@@ -464,12 +467,12 @@ namespace Households
         {
             if (HouseholdCount == 0) return;
             Console.WriteLine($"\n--- Household size {HouseholdSize} (Count: {HouseholdCount}) ---");
-            for (int h = 0; h < HouseholdCount; h++)
+            for (int i = 0; i < HouseholdCount; i++)
             {
-                Console.Write($"  Household ID {_householdIds[h]}: ");
-                int start = h * HouseholdSize;
-                for (int p = 0; p < HouseholdSize; p++)
-                    Console.Write($"[Age: {Ages[start + p]}, Edu: {Hfs[start + p]}] ");
+                Console.Write($"  Household ID {_householdIds[i]}: ");
+                int start = i * HouseholdSize;
+                for (int j = 0; j < HouseholdSize; j++)
+                    Console.Write($"[Age: {Ages[start + j]}, Edu: {Hfs[start + j]}] ");
                 Console.WriteLine();
             }
         }
