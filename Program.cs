@@ -1,18 +1,19 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics; // IDE hover
 
 namespace Households
 {
     public static class Constants
-    {        
-        public static int nThreads = 1;        
+    {
+        public static int nThreads = 1;
     }
 
     public enum LifecycleType
     {
-        BirthOnly,
-        BirthAndDeath
+        Birth,
+        Death
     }
 
     class Program
@@ -20,6 +21,7 @@ namespace Households
         static void Main(string[] args)
         {
             var sim = new Simulation();
+            sim.InitializeBucket(size: 1, cap: 10);
             sim.InitializeBucket(size: 2, cap: 10);
             sim.InitializeBucket(size: 3, cap: 10);
 
@@ -176,7 +178,7 @@ namespace Households
         public int HouseholdSize;
         public int LocalIndex;
         public HouseholdPosition(int size, int idx) { HouseholdSize = size; LocalIndex = idx; }
-    }    
+    }
 
     public struct PendingEvent
     {
@@ -188,7 +190,7 @@ namespace Households
         {
             HouseholdId = id; Type = type; TargetPersonAbsIdx = targetIdx;
         }
-    }    
+    }
 
     /// <summary>
     /// Simulation af modellen
@@ -204,6 +206,7 @@ namespace Households
         public void CreateHousehold(int id, int[] ages, string[] educations)
         {
             int size = ages.Length;
+            if (!_buckets.ContainsKey(size)) InitializeBucket(size, 1000);
             int localIdx = _buckets[size].InsertHousehold(id, ages, educations);
             _registry[id] = new HouseholdPosition(size, localIdx);
         }
@@ -218,10 +221,12 @@ namespace Households
             Console.WriteLine($"\nProcessing {_structuralEventQueue.Count} structural events sequentially...");
             while (_structuralEventQueue.TryDequeue(out PendingEvent ev))
             {
-                var loc = _registry[ev.HouseholdId];
+                // Verify household still exists in the registry (e.g., if multiple events changed it)
+                if (!_registry.TryGetValue(ev.HouseholdId, out var loc)) continue;
+
                 var bucket = _buckets[loc.HouseholdSize];
 
-                if (ev.Type == LifecycleType.BirthOnly)
+                if (ev.Type == LifecycleType.Birth)
                 {
                     int newSize = loc.HouseholdSize + 1;
                     if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
@@ -245,13 +250,46 @@ namespace Households
                     int newLocalIdx = _buckets[newSize].InsertHousehold(ev.HouseholdId, newAges, newEdus);
                     _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
                 }
-                else if (ev.Type == LifecycleType.BirthAndDeath)
+                else if (ev.Type == LifecycleType.Death)
                 {
-                    bucket.AgesSpan[ev.TargetPersonAbsIdx] = 0;
-                    bucket.HfsSpan[ev.TargetPersonAbsIdx] = "None";
+                    int newSize = loc.HouseholdSize - 1;
+                    int startIdx = loc.LocalIndex * loc.HouseholdSize;
+                    int targetLocalPersonIdx = ev.TargetPersonAbsIdx - startIdx;
 
-                    Person baby = new Person(bucket, ev.TargetPersonAbsIdx);
-                    Console.WriteLine($"[LOG] Baby born into HH {baby.Household.Id} directly recycling deceased person's memory slot.");
+                    if (newSize == 0)
+                    {
+                        // The last member died, entirely dissolve the household
+                        bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
+                        {
+                            _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
+                        });
+                        _registry.Remove(ev.HouseholdId);
+                    }
+                    else
+                    {
+                        if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
+
+                        int[] newAges = new int[newSize];
+                        string[] newEdus = new string[newSize];
+                        int destIdx = 0;
+
+                        // Transfer everyone except the deceased person
+                        for (int i = 0; i < loc.HouseholdSize; i++)
+                        {
+                            if (i == targetLocalPersonIdx) continue;
+                            newAges[destIdx] = bucket.AgesSpan[startIdx + i];
+                            newEdus[destIdx] = bucket.HfsSpan[startIdx + i];
+                            destIdx++;
+                        }
+
+                        bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
+                        {
+                            _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
+                        });
+
+                        int newLocalIdx = _buckets[newSize].InsertHousehold(ev.HouseholdId, newAges, newEdus);
+                        _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
+                    }
                 }
             }
         }
@@ -334,7 +372,7 @@ namespace Households
 
                 if (id == 101)
                 {
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.BirthOnly));
+                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Birth));
                 }
                 else if (id == 102)
                 {
@@ -342,7 +380,8 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 65) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.BirthAndDeath, deadAbsIdx));
+                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Death, deadAbsIdx));
+                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Birth));
                 }
                 else if (id == 103)
                 {
@@ -350,13 +389,14 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 33) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.BirthAndDeath, deadAbsIdx));
+                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Death, deadAbsIdx));
                 }
             });
         }
 
         public void PrintBucketState()
         {
+            if (HouseholdCount == 0) return;
             Console.WriteLine($"\n--- Household size {HouseholdSize} (Count: {HouseholdCount}) ---");
             for (int h = 0; h < HouseholdCount; h++)
             {
