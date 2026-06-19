@@ -124,6 +124,9 @@ namespace Households
         }
     }
 
+    /// <summary>
+    /// For at kunne indeksere personer i husholdningen efter nummer og loope over dem.
+    /// </summary>
     [DebuggerDisplay("Count = {Count}")]
     public readonly struct PersonList
     {
@@ -180,13 +183,13 @@ namespace Households
         public HouseholdPosition(int size, int idx) { HouseholdSize = size; LocalIndex = idx; }
     }
 
-    public struct PendingEvent
+    public struct HouseholdSizeEvent
     {
         public int HouseholdId;
         public LifecycleType Type;
         public int TargetPersonAbsIdx;
 
-        public PendingEvent(int id, LifecycleType type, int targetIdx = -1)
+        public HouseholdSizeEvent(int id, LifecycleType type, int targetIdx = -1)
         {
             HouseholdId = id; Type = type; TargetPersonAbsIdx = targetIdx;
         }
@@ -199,7 +202,7 @@ namespace Households
     {
         private Dictionary<int, HouseholdsOfGivenSize> _buckets = new Dictionary<int, HouseholdsOfGivenSize>();
         private Dictionary<int, HouseholdPosition> _registry = new Dictionary<int, HouseholdPosition>();
-        private ConcurrentQueue<PendingEvent> _structuralEventQueue = new ConcurrentQueue<PendingEvent>();
+        private ConcurrentQueue<HouseholdSizeEvent> _structuralEventQueue = new ConcurrentQueue<HouseholdSizeEvent>();
 
         public void InitializeBucket(int size, int cap) => _buckets[size] = new HouseholdsOfGivenSize(size, cap);
 
@@ -219,7 +222,7 @@ namespace Households
             }
 
             Console.WriteLine($"\nProcessing {_structuralEventQueue.Count} structural events sequentially...");
-            while (_structuralEventQueue.TryDequeue(out PendingEvent ev))
+            while (_structuralEventQueue.TryDequeue(out HouseholdSizeEvent ev))
             {
                 if (!_registry.TryGetValue(ev.HouseholdId, out var loc)) continue;
 
@@ -230,22 +233,17 @@ namespace Households
                     int newSize = loc.HouseholdSize + 1;
                     if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
 
-                    int[] newAges = new int[newSize];
-                    string[] newEdus = new string[newSize];
-
                     int sourceStart = loc.LocalIndex * loc.HouseholdSize;
-                    Array.Copy(bucket.Ages, sourceStart, newAges, 0, loc.HouseholdSize);
-                    Array.Copy(bucket.Hfs, sourceStart, newEdus, 0, loc.HouseholdSize);
+                    var targetBucket = _buckets[newSize];
 
-                    newAges[newSize - 1] = 0;
-                    newEdus[newSize - 1] = "None";
-
+                    // Fjern gammel household fra nuværende bucket vha. swap-back
                     bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
                     {
                         _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
                     });
 
-                    int newLocalIdx = _buckets[newSize].InsertHousehold(ev.HouseholdId, newAges, newEdus);
+                    // Flytter eksisterende personer og tilføjer 1 ny
+                    int newLocalIdx = targetBucket.MigrateFromSmallerBucket(ev.HouseholdId, bucket, sourceStart, loc.HouseholdSize, 0, "None");
                     _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
                 }
                 else if (ev.Type == LifecycleType.Death)
@@ -271,24 +269,16 @@ namespace Households
                     {
                         if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
 
-                        int[] newAges = new int[newSize];
-                        string[] newEdus = new string[newSize];
-                        int destIdx = 0;
+                        var targetBucket = _buckets[newSize];
 
-                        for (int i = 0; i < loc.HouseholdSize; i++)
-                        {
-                            if (i == targetLocalPersonIdx) continue;
-                            newAges[destIdx] = bucket.Ages[startIdx + i];
-                            newEdus[destIdx] = bucket.Hfs[startIdx + i];
-                            destIdx++;
-                        }
-
+                        // Fjern gammel household fra nuværende bucket vha. swap-back
                         bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
                         {
                             _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
                         });
 
-                        int newLocalIdx = _buckets[newSize].InsertHousehold(ev.HouseholdId, newAges, newEdus);
+                        // Flytter eksisterende personer undtagen den fjernede person
+                        int newLocalIdx = targetBucket.MigrateFromLargerBucket(ev.HouseholdId, bucket, startIdx, loc.HouseholdSize, targetLocalPersonIdx);
                         _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
                     }
                 }
@@ -336,6 +326,49 @@ namespace Households
             return localHIdx;
         }
 
+        public int MigrateFromSmallerBucket(int householdId, HouseholdsOfGivenSize oldBucket, int oldSourceStart, int oldSize, int newAge, string newHf)
+        {
+            int localHIdx = HouseholdCount;
+            _householdIds[localHIdx] = householdId;
+            int startPersonIdx = localHIdx * HouseholdSize;
+
+            // Direkte kopi af eksisterende
+            Array.Copy(oldBucket.Ages, oldSourceStart, Ages, startPersonIdx, oldSize);
+            Array.Copy(oldBucket.Hfs, oldSourceStart, Hfs, startPersonIdx, oldSize);
+
+            // Ny person tilføjes
+            Ages[startPersonIdx + oldSize] = newAge;
+            Hfs[startPersonIdx + oldSize] = newHf;
+
+            HouseholdCount++;
+            return localHIdx;
+        }
+
+        public int MigrateFromLargerBucket(int householdId, HouseholdsOfGivenSize oldBucket, int oldSourceStart, int oldSize, int excludeLocalIdx)
+        {
+            int localHIdx = HouseholdCount;
+            _householdIds[localHIdx] = householdId;
+            int startPersonIdx = localHIdx * HouseholdSize;
+
+            // Kopier alt før den fjernede person
+            if (excludeLocalIdx > 0)
+            {
+                Array.Copy(oldBucket.Ages, oldSourceStart, Ages, startPersonIdx, excludeLocalIdx);
+                Array.Copy(oldBucket.Hfs, oldSourceStart, Hfs, startPersonIdx, excludeLocalIdx);
+            }
+
+            // Kopier alt efter den fjernede person
+            int rightChunkSize = oldSize - 1 - excludeLocalIdx;
+            if (rightChunkSize > 0)
+            {
+                Array.Copy(oldBucket.Ages, oldSourceStart + excludeLocalIdx + 1, Ages, startPersonIdx + excludeLocalIdx, rightChunkSize);
+                Array.Copy(oldBucket.Hfs, oldSourceStart + excludeLocalIdx + 1, Hfs, startPersonIdx + excludeLocalIdx, rightChunkSize);
+            }
+
+            HouseholdCount++;
+            return localHIdx;
+        }
+
         public void RemoveHouseholdAndSwapLast(int targetLocalHIdx, Action<int, int> onLastHouseholdMoved)
         {
             int lastLocalHIdx = HouseholdCount - 1;
@@ -355,14 +388,14 @@ namespace Households
             HouseholdCount--;
         }
 
-        public void ParallelYearlyUpdate(ConcurrentQueue<PendingEvent> eventQueue)
+        public void ParallelYearlyUpdate(ConcurrentQueue<HouseholdSizeEvent> eventQueue)
         {
             Parallel.For(0, HouseholdCount, new ParallelOptions { MaxDegreeOfParallelism = Constants.nThreads }, h =>
             {
                 int id = _householdIds[h];
                 Household household = new Household(this, h, id);
 
-                // Age the household members
+                // Personer bliver ældre
                 for (int p = 0; p < household.Members.Count; p++)
                 {
                     Person person = household.Members[p];
@@ -371,7 +404,7 @@ namespace Households
 
                 if (id == 101)
                 {
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Birth));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth));
                 }
                 else if (id == 102)
                 {
@@ -379,8 +412,8 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 65) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Death, deadAbsIdx));
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Birth));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, deadAbsIdx));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth));
                 }
                 else if (id == 103)
                 {
@@ -388,7 +421,7 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 33) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new PendingEvent(id, LifecycleType.Death, deadAbsIdx));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, deadAbsIdx));
                 }
             });
         }
