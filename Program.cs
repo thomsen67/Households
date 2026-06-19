@@ -8,6 +8,7 @@ namespace Households
     public static class Constants
     {
         public static int nThreads = 1;
+        public static int maxSizeHusholdning = 10;
     }
 
     public enum LifecycleType
@@ -189,9 +190,17 @@ namespace Households
         public LifecycleType Type;
         public int TargetPersonAbsIdx;
 
-        public HouseholdSizeEvent(int id, LifecycleType type, int targetIdx = -1)
+        // Direkte tracking mht. buckets af hvor en husholdning befinder sig (så vi ikke skal slå det op i dict)
+        public int SourceBucketSize;
+        public int SourceLocalIndex;
+
+        public HouseholdSizeEvent(int id, LifecycleType type, int sourceSize, int sourceIdx, int targetIdx = -1)
         {
-            HouseholdId = id; Type = type; TargetPersonAbsIdx = targetIdx;
+            HouseholdId = id;
+            Type = type;
+            SourceBucketSize = sourceSize;
+            SourceLocalIndex = sourceIdx;
+            TargetPersonAbsIdx = targetIdx;
         }
     }
 
@@ -200,7 +209,7 @@ namespace Households
     /// </summary>
     public class Simulation
     {
-        private Dictionary<int, HouseholdsOfGivenSize> _buckets = new Dictionary<int, HouseholdsOfGivenSize>();
+        private HouseholdsOfGivenSize[] _buckets = new HouseholdsOfGivenSize[11];
         private Dictionary<int, HouseholdPosition> _registry = new Dictionary<int, HouseholdPosition>();
         private ConcurrentQueue<HouseholdSizeEvent> _structuralEventQueue = new ConcurrentQueue<HouseholdSizeEvent>();
 
@@ -209,83 +218,108 @@ namespace Households
         public void CreateHousehold(int id, int[] ages, string[] educations)
         {
             int size = ages.Length;
-            if (!_buckets.ContainsKey(size)) InitializeBucket(size, 1000);
+            if (_buckets[size] == null) InitializeBucket(size, 1000);
             int localIdx = _buckets[size].InsertHousehold(id, ages, educations);
             _registry[id] = new HouseholdPosition(size, localIdx);
         }
 
         public void RunYearlySimulationCycle()
         {
-            foreach (var bucket in _buckets.Values)
+            for (int i = 1; i < _buckets.Length; i++)
             {
-                bucket.ParallelYearlyUpdate(_structuralEventQueue);
+                if (_buckets[i] != null)
+                {
+                    _buckets[i].ParallelYearlyUpdate(_structuralEventQueue);
+                }
             }
 
-            Console.WriteLine($"\nProcessing {_structuralEventQueue.Count} structural events sequentially...");
+            Console.WriteLine($"\nKører {_structuralEventQueue.Count} events i 1 tråd...");
             while (_structuralEventQueue.TryDequeue(out HouseholdSizeEvent ev))
             {
-                if (!_registry.TryGetValue(ev.HouseholdId, out var loc)) continue;
+                //Kun en mindre del af husholdningerne
+                
+                // Hurtigere end at slå op i dict
+                int currentSize = ev.SourceBucketSize;
+                int currentLocalIdx = ev.SourceLocalIndex;
 
-                var bucket = _buckets[loc.HouseholdSize];
+                var bucket = _buckets[currentSize];
+
+                // Hvis husholdningen har flere events samme år (f.eks. tvillinger), er vi nødt til at slå op i dict
+                if (bucket == null || currentLocalIdx >= bucket.HouseholdCount || bucket.GetHouseholdId(currentLocalIdx) != ev.HouseholdId)
+                {
+                    if (!_registry.TryGetValue(ev.HouseholdId, out var registeredLoc)) continue;
+                    currentSize = registeredLoc.HouseholdSize;
+                    currentLocalIdx = registeredLoc.LocalIndex;
+                    bucket = _buckets[currentSize];
+                }
 
                 if (ev.Type == LifecycleType.Birth)
                 {
-                    int newSize = loc.HouseholdSize + 1;
-                    if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
+                    int newSize = currentSize + 1;
+                    if (newSize > Constants.maxSizeHusholdning) throw new InvalidOperationException("Household size exceeded maximum limit of " + Constants.maxSizeHusholdning + ".");
+                    if (_buckets[newSize] == null) InitializeBucket(newSize, 1000);
 
-                    int sourceStart = loc.LocalIndex * loc.HouseholdSize;
+                    int sourceStart = currentLocalIdx * currentSize;
                     var targetBucket = _buckets[newSize];
 
-                    // Fjern gammel household fra nuværende bucket vha. swap-back
-                    bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
+                    // Fjern gammel householdning fra nuværende bucket vha. swap-back
+                    bucket.RemoveHouseholdAndSwapLast(currentLocalIdx, (shiftedId, newIdx) =>
                     {
-                        _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
+                        _registry[shiftedId] = new HouseholdPosition(currentSize, newIdx);
                     });
 
                     // Flytter eksisterende personer og tilføjer 1 ny
-                    int newLocalIdx = targetBucket.MigrateFromSmallerBucket(ev.HouseholdId, bucket, sourceStart, loc.HouseholdSize, 0, "None");
+                    int newLocalIdx = targetBucket.MigrateFromSmallerBucket(ev.HouseholdId, bucket, sourceStart, currentSize, 0, "None");
+
+                    // Opdaterer
                     _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
                 }
                 else if (ev.Type == LifecycleType.Death)
                 {
-                    int newSize = loc.HouseholdSize - 1;
-                    int startIdx = loc.LocalIndex * loc.HouseholdSize;
+                    int newSize = currentSize - 1;
+                    int startIdx = currentLocalIdx * currentSize;
 
                     int targetLocalPersonIdx = ev.TargetPersonAbsIdx - startIdx;
-                    if (targetLocalPersonIdx < 0 || targetLocalPersonIdx >= loc.HouseholdSize)
+                    if (targetLocalPersonIdx < 0 || targetLocalPersonIdx >= currentSize)
                     {
-                        targetLocalPersonIdx = loc.HouseholdSize - 1;
+                        targetLocalPersonIdx = currentSize - 1;
                     }
 
                     if (newSize == 0)
                     {
-                        bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
+                        bucket.RemoveHouseholdAndSwapLast(currentLocalIdx, (shiftedId, newIdx) =>
                         {
-                            _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
+                            _registry[shiftedId] = new HouseholdPosition(currentSize, newIdx);
                         });
                         _registry.Remove(ev.HouseholdId);
                     }
                     else
                     {
-                        if (!_buckets.ContainsKey(newSize)) InitializeBucket(newSize, 1000);
+                        if (_buckets[newSize] == null) InitializeBucket(newSize, 1000);
 
                         var targetBucket = _buckets[newSize];
 
                         // Fjern gammel household fra nuværende bucket vha. swap-back
-                        bucket.RemoveHouseholdAndSwapLast(loc.LocalIndex, (shiftedId, newLocalIdx) =>
+                        bucket.RemoveHouseholdAndSwapLast(currentLocalIdx, (shiftedId, newIdx) =>
                         {
-                            _registry[shiftedId] = new HouseholdPosition(loc.HouseholdSize, newLocalIdx);
+                            _registry[shiftedId] = new HouseholdPosition(currentSize, newIdx);
                         });
 
                         // Flytter eksisterende personer undtagen den fjernede person
-                        int newLocalIdx = targetBucket.MigrateFromLargerBucket(ev.HouseholdId, bucket, startIdx, loc.HouseholdSize, targetLocalPersonIdx);
+                        int newLocalIdx = targetBucket.MigrateFromLargerBucket(ev.HouseholdId, bucket, startIdx, currentSize, targetLocalPersonIdx);
                         _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
                     }
                 }
             }
         }
 
-        public void PrintState() { foreach (var b in _buckets.Values) b.PrintBucketState(); }
+        public void PrintState()
+        {
+            for (int i = 1; i < _buckets.Length; i++)
+            {
+                if (_buckets[i] != null) _buckets[i].PrintBucketState();
+            }
+        }
     }
 
     /// <summary>
@@ -404,7 +438,7 @@ namespace Households
 
                 if (id == 101)
                 {
-                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth, HouseholdSize, h));
                 }
                 else if (id == 102)
                 {
@@ -412,8 +446,8 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 65) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, deadAbsIdx));
-                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, HouseholdSize, h, deadAbsIdx));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth, HouseholdSize, h));
                 }
                 else if (id == 103)
                 {
@@ -421,7 +455,7 @@ namespace Households
                     for (int p = 0; p < household.Members.Count; p++)
                         if (household.Members[p].Age == 33) deadAbsIdx = household.Members[p].AbsIdx;
 
-                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, deadAbsIdx));
+                    eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, HouseholdSize, h, deadAbsIdx));
                 }
             });
         }
