@@ -5,10 +5,26 @@ using System.Diagnostics; // IDE hover
 
 namespace Households
 {
-    public static class Constants
+    public enum EHf
+    {        
+        Ingen,
+        ProfBachelor,
+        AlmenGym,
+        Kandidat,
+        PhD        
+    }
+
+public static class Globals
     {
-        public static int nThreads = 1;
-        public static int maxSizeHusholdning = 10;
+        public static int nThreads = 8;
+        public static int reps = 5;
+        public static int maxSizeHusholdning = 20;
+        public static int nPop = 100000;        
+        public static int nPop2 = 100000;        
+        public static int nPop3 = 100000;
+        public static int bucketSize = 10 * Globals.nPop;
+        public static int simulations = 8;
+        public static int slotSize = 10;
     }
 
     public enum LifecycleType
@@ -21,20 +37,63 @@ namespace Households
     {
         static void Main(string[] args)
         {
-            var sim = new Simulation();
-            sim.InitializeBucket(size: 1, cap: 10);
-            sim.InitializeBucket(size: 2, cap: 10);
-            sim.InitializeBucket(size: 3, cap: 10);
+            Console.WriteLine();
+            Console.WriteLine(" -------------------- [2: objects] ------------------------------- ");
+            Console.WriteLine();
 
-            sim.CreateHousehold(101, new[] { 45, 21 }, new[] { "Prof bachelor", "Almen gym" });
-            sim.CreateHousehold(102, new[] { 64, 62 }, new[] { "Kandidat", "Prof bachelor" });
-            sim.CreateHousehold(103, new[] { 32, 5 }, new[] { "PhD", "Ingen" });
+            Program2.Main2(null);
 
-            sim.PrintState();
+            Console.WriteLine();
+            Console.WriteLine(" ----------------------[3: slots] ----------------------------- ");
+            Console.WriteLine();
 
-            sim.RunYearlySimulationCycle();
+            Program3.Main3(null);
 
-            sim.PrintState();
+            Console.WriteLine();
+            Console.WriteLine(" ----------------------[3: buckets] ----------------------------- ");
+            Console.WriteLine();
+
+            for (int r = 0; r < Globals.reps; r++)
+            {
+                DateTime t0 = DateTime.Now;
+                var sim = new Simulation();
+                sim.InitializeBucket(householdSize: 1, max: Globals.bucketSize);
+                sim.InitializeBucket(householdSize: 2, max: Globals.bucketSize);
+                sim.InitializeBucket(householdSize: 3, max: Globals.bucketSize);
+                for (int j = 0; j < Globals.nPop; j++)
+                {
+                    sim.CreateHousehold(10 * j + 0, new[] { 18, 18 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 1, new[] { 64, 62 }, new[] { EHf.Kandidat, EHf.ProfBachelor });
+                    sim.CreateHousehold(10 * j + 2, new[] { 32, 5 }, new[] { EHf.PhD, EHf.Ingen });
+                    sim.CreateHousehold(10 * j + 3, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 4, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 5, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 6, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 7, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 8, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                    sim.CreateHousehold(10 * j + 9, new[] { 25, 25 }, new[] { EHf.AlmenGym, EHf.AlmenGym });
+                }
+                DateTime t1 = DateTime.Now;
+                for (int i = 0; i < Globals.simulations; i++)
+                {
+                    //sim.PrintState();
+                    sim.RunYearlySimulationCycle();
+                    //sim.PrintState();
+                }
+                DateTime t2 = DateTime.Now;
+                double value = 1234567.89;
+                Pretty(value);
+
+                Console.WriteLine("Load per size: " + Pretty((double)Globals.nPop / (t1 - t0).TotalMilliseconds * 1000d));
+                Console.WriteLine("Sim per size: " + Pretty((double)Globals.nPop / (t2 - t1).TotalMilliseconds * 1000d));
+                Console.WriteLine();
+            }
+        }
+
+        public static string Pretty(double value)
+        {
+            string s = ((long)value).ToString("N0", new System.Globalization.CultureInfo("da-DK"));
+            return s;
         }
     }
 
@@ -110,7 +169,7 @@ namespace Households
             set => _storage.Ages[AbsIdx] = value;
         }
 
-        public string Hf
+        public EHf Hf
         {
             get => _storage.Hfs[AbsIdx];
             set => _storage.Hfs[AbsIdx] = value;
@@ -218,12 +277,12 @@ namespace Households
         private Dictionary<int, HouseholdPosition> _registry = new Dictionary<int, HouseholdPosition>();
         private ConcurrentQueue<HouseholdSizeEvent> _structuralEventQueue = new ConcurrentQueue<HouseholdSizeEvent>();
 
-        public void InitializeBucket(int size, int cap) => _buckets[size] = new HouseholdsOfGivenSize(size, cap);
+        public void InitializeBucket(int householdSize, int max) => _buckets[householdSize] = new HouseholdsOfGivenSize(householdSize, max);
 
-        public void CreateHousehold(int id, int[] ages, string[] educations)
+        public void CreateHousehold(int id, int[] ages, EHf[] educations)
         {
             int size = ages.Length;
-            if (_buckets[size] == null) InitializeBucket(size, 1000);
+            if (_buckets[size] == null) InitializeBucket(size, Globals.bucketSize);
             int localIdx = _buckets[size].InsertHousehold(id, ages, educations);
             _registry[id] = new HouseholdPosition(size, localIdx);
         }
@@ -238,7 +297,7 @@ namespace Households
                 }
             }
 
-            Console.WriteLine($"\nKører {_structuralEventQueue.Count} events i 1 tråd...");
+            //Console.WriteLine($"\nKører {_structuralEventQueue.Count} events i 1 tråd...");
             while (_structuralEventQueue.TryDequeue(out HouseholdSizeEvent ev))
             {
                 //Kun en mindre del af husholdningerne
@@ -261,8 +320,8 @@ namespace Households
                 if (ev.Type == LifecycleType.Birth)
                 {
                     int newSize = currentSize + 1;
-                    if (newSize > Constants.maxSizeHusholdning) throw new InvalidOperationException("Household size exceeded maximum limit of " + Constants.maxSizeHusholdning + ".");
-                    if (_buckets[newSize] == null) InitializeBucket(newSize, 1000);
+                    if (newSize > Globals.maxSizeHusholdning) throw new InvalidOperationException("Household size exceeded maximum limit of " + Globals.maxSizeHusholdning + ".");
+                    if (_buckets[newSize] == null) InitializeBucket(newSize, Globals.bucketSize);
 
                     int sourceStart = currentLocalIdx * currentSize;
                     var targetBucket = _buckets[newSize];
@@ -274,7 +333,7 @@ namespace Households
                     });
 
                     // Flytter eksisterende personer og tilføjer 1 ny
-                    int newLocalIdx = targetBucket.MigrateFromSmallerBucket(ev.HouseholdId, bucket, sourceStart, currentSize, 0, "None");
+                    int newLocalIdx = targetBucket.MigrateFromSmallerBucket(ev.HouseholdId, bucket, sourceStart, currentSize, 0, EHf.Ingen);
 
                     // Opdaterer
                     _registry[ev.HouseholdId] = new HouseholdPosition(newSize, newLocalIdx);
@@ -300,7 +359,7 @@ namespace Households
                     }
                     else
                     {
-                        if (_buckets[newSize] == null) InitializeBucket(newSize, 1000);
+                        if (_buckets[newSize] == null) InitializeBucket(newSize, Globals.bucketSize);
 
                         var targetBucket = _buckets[newSize];
 
@@ -337,20 +396,20 @@ namespace Households
         public int HouseholdCount { get; private set; }
 
         public int[] Ages { get; }
-        public string[] Hfs { get; }
+        public EHf[] Hfs { get; }
         private int[] _householdIds;
 
         public HouseholdsOfGivenSize(int householdSize, int initialCapacity)
         {
             HouseholdSize = householdSize;
             Ages = new int[initialCapacity * householdSize];
-            Hfs = new string[initialCapacity * householdSize];
+            Hfs = new EHf[initialCapacity * householdSize];
             _householdIds = new int[initialCapacity];
         }
 
         public int GetHouseholdId(int localHIdx) => _householdIds[localHIdx];
 
-        public int InsertHousehold(int householdId, int[] ages, string[] educations)
+        public int InsertHousehold(int householdId, int[] ages, EHf[] educations)
         {
             int localHIdx = HouseholdCount;
             _householdIds[localHIdx] = householdId;
@@ -365,7 +424,7 @@ namespace Households
             return localHIdx;
         }
 
-        public int MigrateFromSmallerBucket(int householdId, HouseholdsOfGivenSize oldBucket, int oldSourceStart, int oldSize, int newAge, string newHf)
+        public int MigrateFromSmallerBucket(int householdId, HouseholdsOfGivenSize oldBucket, int oldSourceStart, int oldSize, int newAge, EHf newHf)
         {
             int localHIdx = HouseholdCount;
             _householdIds[localHIdx] = householdId;
@@ -429,7 +488,7 @@ namespace Households
 
         public void ParallelYearlyUpdate(ConcurrentQueue<HouseholdSizeEvent> eventQueue)
         {
-            Parallel.For(0, HouseholdCount, new ParallelOptions { MaxDegreeOfParallelism = Constants.nThreads }, h =>
+            Parallel.For(0, HouseholdCount, new ParallelOptions { MaxDegreeOfParallelism = Globals.nThreads }, h =>
             {
                 int id = _householdIds[h];
                 Household household = new Household(this, h, id);
@@ -439,13 +498,13 @@ namespace Households
                 {
                     Person person = household.Members[i];
                     person.Age += 1;
-                }
+                }                
 
-                if (id == 101)
+                if (id % 10 == 0)
                 {
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth, HouseholdSize, h));
                 }
-                else if (id == 102)
+                if (id % 10 == 1)
                 {
                     int deadAbsIdx = -1;
                     for (int p = 0; p < household.Members.Count; p++)
@@ -453,7 +512,7 @@ namespace Households
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Death, HouseholdSize, h, deadAbsIdx));
                     eventQueue.Enqueue(new HouseholdSizeEvent(id, LifecycleType.Birth, HouseholdSize, h));
                 }
-                else if (id == 103)
+                if (id % 10 == 2)
                 {
                     int deadAbsIdx = -1;
                     for (int p = 0; p < household.Members.Count; p++)
