@@ -8,4 +8,4 @@ en liste over Persons i en Household, og at Person kan vise hvilken Household de
 I eksemplet er der få "new" keywords, og "new Household..." eller "new Person..." danner ikke et objekt, men en struct (som allokeres i stacken og ikke i heapen,
 hvilket kører en del hurtigere).
 
-Der køres nogle hastighedstests, hvor Program2.cs er objektorienteret, Program.cs er "buckets", og Program3.cs er "slots". Program.cs og Program3.cs er begge ca. en faktor 10 hurtigere til indlæsning af husholdninger end Program2.cs. Derimod kører Program3.cs ca. 7x hurtigere end de to andre mht. simulationer.
+Der køres nogle hastighedstests, hvor Program2.cs er objektorienteret, Program.cs er "buckets", og Program3.cs er "slots". Program.cs og Program3.cs er begge ca. 10x hurtigere til indlæsning af husholdninger end Program2.cs. Derimod kører Program3.cs ca. 20x hurtigere end Program2.cs mht. simulationer, mens Program.cs "kun" er dobbelt så hurtig som Program2.cs.
