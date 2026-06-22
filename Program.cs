@@ -19,9 +19,9 @@ public static class Globals
         public static int nThreads = 8;
         public static int reps = 5;
         public static int maxSizeHusholdning = 20;
-        public static int nPop = 100000;        
-        public static int nPop2 = 100000;        
-        public static int nPop3 = 100000;
+        public static int nPop = 1000000;        
+        public static int nPop2 = 1000000;        
+        public static int nPop3 = 1000000;
         public static int bucketSize = 10 * Globals.nPop;
         public static int simulations = 8;
         public static int slotSize = 10;
@@ -38,19 +38,19 @@ public static class Globals
         static void Main(string[] args)
         {
             Console.WriteLine();
-            Console.WriteLine(" -------------------- [2: objects] ------------------------------- ");
+            Console.WriteLine(" -------------------- [Program2.cs: objects] ------------------------------- ");
             Console.WriteLine();
 
             Program2.Main2(null);
 
             Console.WriteLine();
-            Console.WriteLine(" ----------------------[3: slots] ----------------------------- ");
+            Console.WriteLine(" ----------------------[Program3.cs: slots] ----------------------------- ");
             Console.WriteLine();
 
             Program3.Main3(null);
 
             Console.WriteLine();
-            Console.WriteLine(" ----------------------[3: buckets] ----------------------------- ");
+            Console.WriteLine(" ----------------------[Program.cs: buckets] ----------------------------- ");
             Console.WriteLine();
 
             for (int r = 0; r < Globals.reps; r++)
